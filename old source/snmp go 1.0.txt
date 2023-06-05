@@ -1,0 +1,191 @@
+package main
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/gosnmp/gosnmp"
+
+	"os"
+)
+
+// Struct to hold SNMP server details
+type SNMPConfig struct {
+	IP   string
+	Port uint16
+}
+
+// Struct to hold SNMP trap information
+type SNMPTrap struct {
+	Oid       string `json:"oid"`
+	Value     string `json:"value"`
+	StartTime int64  `json:"start_time"`
+}
+
+// Function to open UDP socket and listen for SNMP traps
+func listenForSNMPTraps(addr string) {
+	// Open UDP socket on the specified address
+	conn, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		log.Fatalf("Error creating UDP socket: %s\n", err.Error())
+	}
+	defer conn.Close()
+
+	fmt.Printf("UDP server listening on %s\n", addr)
+
+	// Buffer to store incoming packet data
+	buffer := make([]byte, 1024)
+
+	// Receive and process incoming packets
+	for {
+		// Read from the connection into the buffer
+		n, _, err := conn.ReadFrom(buffer)
+		if err != nil {
+			log.Printf("Error reading from UDP socket: %s\n", err.Error())
+			continue
+		}
+
+		go func(packet []byte) {
+			// Extract SNMP trap information from the received packet
+			trap, err := extractSNMPTrapInfo(packet)
+			if err != nil {
+				log.Printf("Error extracting SNMP trap information: %s\n", err.Error())
+				return
+			}
+
+			// Retrieve SNMP server details from the database
+			snmpConfig, err := getSNMPConfigFromDB()
+			if err != nil {
+				log.Printf("Error retrieving SNMP server details: %s\n", err.Error())
+				return
+			}
+
+			// Create an SNMP trap message
+			trap.StartTime = time.Now().Unix()
+
+			// Convert SNMP trap to JSON
+			trapJSON, err := json.Marshal(trap)
+			if err != nil {
+				log.Printf("Error converting SNMP trap to JSON: %s\n", err.Error())
+				return
+			}
+
+			// Send the SNMP trap message to the SNMP server
+			err = sendSNMPTrap(trapJSON, snmpConfig.IP, snmpConfig.Port)
+			if err != nil {
+				log.Printf("Error sending SNMP trap: %s\n", err.Error())
+				return
+			}
+
+			fmt.Println("\n\nSNMP trap sent successfully!")
+
+			// ADD COMMENT
+			db, err := sql.Open("mysql", "user1:1234@tcp(localhost:3306)/snmp")
+			if err != nil {
+				fmt.Errorf("Error connecting to database: %s", err.Error())
+			}
+			defer db.Close()
+
+			date := time.Now()
+			formatedDate := date.Format("01-02-2006 15:04:05")
+
+			// ADD COMMENT
+			// insertQuery := "INSERT INTO log (action, data, date) VALUES ('New Packet Received',?,?)"
+			// result, err := db.Exec(insertQuery, string(packet), formatedDate)
+
+			insertQuery, err := db.Query("INSERT INTO log (action, data, date) VALUES ('New Packet Received',?,?)", string(packet), formatedDate)
+
+			if err != nil {
+				panic(err.Error())
+			}
+			defer insertQuery.Close()
+
+			fmt.Printf("packet inserted into database successfully!\n")
+
+			// ADD COMMENT
+			f, err := os.OpenFile("logSample.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			logTemplate := formatedDate + " || Notice: New Packet Received! => " + string(packet)
+
+			n, err := f.WriteString(logTemplate)
+			if err != nil {
+				log.Fatal(err)
+			}
+			_ = n
+			fmt.Printf("packet inserted into log file successfully!")
+			f.Sync()
+
+		}(buffer[:n])
+	}
+}
+
+// Function to extract SNMP trap information from the packet
+func extractSNMPTrapInfo(packet []byte) (*SNMPTrap, error) {
+	// Add your logic to extract the OID and value from the packet
+	// and create an SNMPTrap struct with the extracted values
+	oid := "1.3.6.1.2.1.1.3.0"
+	value := "uptime"
+	trap := &SNMPTrap{
+		Oid:   oid,
+		Value: value,
+	}
+	return trap, nil
+}
+
+// Function to retrieve SNMP server details from the database
+func getSNMPConfigFromDB() (SNMPConfig, error) {
+	// Connect to the snmp database to retrieve SNMP server details
+	db, err := sql.Open("mysql", "user1:1234@tcp(localhost:3306)/snmp")
+	if err != nil {
+		return SNMPConfig{}, fmt.Errorf("Error connecting to database: %s", err.Error())
+	}
+	defer db.Close()
+
+	// Retrieve SNMP server details from the genopts table
+	var snmpConfig SNMPConfig
+	err = db.QueryRow("SELECT snmp_server_ip, snmp_trap_port FROM genopts LIMIT 1").Scan(&snmpConfig.IP, &snmpConfig.Port)
+	if err != nil {
+		return SNMPConfig{}, fmt.Errorf("Error retrieving SNMP server details: %s", err.Error())
+	}
+
+	return snmpConfig, nil
+}
+
+// Function to send SNMP trap to the SNMP server
+func sendSNMPTrap(trapJSON []byte, ip string, port uint16) error {
+	// Create a new SNMP client
+	client := &gosnmp.GoSNMP{
+		Target:    ip,
+		Port:      port,
+		Community: "public",
+		Version:   gosnmp.Version2c,
+		Timeout:   time.Duration(5) * time.Second,
+	}
+
+	// Connect to the SNMP server
+	err := client.Connect()
+	if err != nil {
+		return err
+	}
+	defer client.Conn.Close()
+
+	// Send the SNMP trap
+	//  err = client.SendTrapBytes(trapJSON)
+	//  if err != nil {
+	//  return err
+	//  }
+
+	return nil
+}
+
+func main() {
+	listenForSNMPTraps("127.0.0.1:222")
+}
