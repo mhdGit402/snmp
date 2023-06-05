@@ -1,0 +1,1 @@
+create table log (id int not null auto_increment, action varchar (255), data varchar (255),date varchar(255), primary key(id));
