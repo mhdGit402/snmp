@@ -60,7 +60,38 @@ func myTrapHandler(packet *g.SnmpPacket, addr *net.UDPAddr) {
 		default:
 			// log.Printf("trap: %+v\n", v)
 			// sendTrap(v.Name, v.Type, string(v.Value.([]byte)))
+			sendTrap2(v)
 		}
+	}
+}
+
+func sendTrap2(trapPacket g.SnmpPDU) {
+	g.Default.Target = "127.0.0.1"
+	g.Default.Port = 164
+	g.Default.Version = g.Version2c
+	g.Default.Community = "public"
+	// g.Default.Logger = g.NewLogger(log.New(os.Stdout, "", 0))
+	err := g.Default.Connect()
+	if err != nil {
+		log.Fatalf("Connect() err: %v", err)
+	}
+	defer g.Default.Conn.Close()
+
+	pdu := g.SnmpPDU{
+		Name:  trapPacket.Name,
+		Type:  trapPacket.Type,
+		Value: trapPacket.Value,
+	}
+
+	trap := g.SnmpTrap{
+		Variables: []g.SnmpPDU{pdu},
+	}
+
+	_, err = g.Default.SendTrap(trap)
+	if err != nil {
+		log.Fatalf("SendTrap() err: %v", err)
+	} else {
+		log.Print("Trap sent to SNMP server")
 	}
 }
 
